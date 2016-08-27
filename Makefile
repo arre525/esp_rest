@@ -10,25 +10,24 @@
 # relative to the project directory
 BUILD_BASE	= build
 FW_BASE		= firmware
+USER=`whoami`
 
-# Base directory for the compiler
-#XTENSA_TOOLS_ROOT ?= /opt/Espressif/crosstool-NG/builds/xtensa-lx106-elf/bin
-XTENSA_TOOLS_ROOT ?= /opt/xtensa-lx106-elf/bin
+# base directory for the compiler
+XTENSA_TOOLS_ROOT ?= /home/$(USER)/share/esp-open-sdk/xtensa-lx106-elf/bin
 
 # base directory of the ESP8266 SDK package, absolute
-#SDK_BASE	?= /opt/Espressif/ESP8266_SDK
-SDK_BASE	?= /home/esp8266/sdk
+SDK_BASE	?= /home/$(USER)/share/esp-open-sdk/esp_iot_sdk_v1.4.0
 
-#Esptool.py path and port
-ESPTOOL		?= ./esptool.py
+# esptool.py path and port
+ESPTOOL		?= /home/$(USER)/share/esp-open-sdk/xtensa-lx106-elf/bin/esptool.py
 ESPPORT		?= /dev/ttyUSB0
 
 # name for the target project
-TARGET		= app
+TARGET		= thingspeekproggie
 
 # which modules (subdirectories) of the project to include in compiling
 MODULES		= driver user
-EXTRA_INCDIR    = include /opt/Espressif/include
+EXTRA_INCDIR    = include
 
 # libraries used in this project, mainly provided by the SDK
 LIBS		= c gcc hal pp phy net80211 lwip wpa main
@@ -54,6 +53,8 @@ FW_FILE_1_ARGS	= -bo $@ -bs .text -bs .data -bs .rodata -bc -ec
 FW_FILE_2	= 0x40000
 FW_FILE_2_ARGS	= -es .irom0.text $@ -ec
 BLANKER := $(addprefix $(SDK_BASE)/,bin/blank.bin)
+FW_FILE_1_ADDR	= 0x00000
+FW_FILE_2_ADDR	= 0x40000
 
 # select which tools to use as compiler, librarian and linker
 CC		:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-gcc
@@ -65,7 +66,7 @@ LD		:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-gcc
 ####
 #### no user configurable options below here
 ####
-FW_TOOL		?= /usr/bin/esptool
+FW_TOOL		?= $(ESPTOOL)
 SRC_DIR		:= $(MODULES)
 BUILD_DIR	:= $(addprefix $(BUILD_BASE)/,$(MODULES))
 
@@ -86,6 +87,8 @@ MODULE_INCDIR	:= $(addsuffix /include,$(INCDIR))
 
 FW_FILE_1	:= $(addprefix $(FW_BASE)/,$(FW_FILE_1).bin)
 FW_FILE_2	:= $(addprefix $(FW_BASE)/,$(FW_FILE_2).bin)
+FW_FILE_1	:= $(addprefix $(FW_BASE)/,$(FW_FILE_1_ADDR).bin)
+FW_FILE_2	:= $(addprefix $(FW_BASE)/,$(FW_FILE_2_ADDR).bin)
 
 V ?= $(VERBOSE)
 ifeq ("$(V)","1")
@@ -108,13 +111,9 @@ endef
 
 all: checkdirs $(TARGET_OUT) $(FW_FILE_1) $(FW_FILE_2)
 
-$(FW_FILE_1): $(TARGET_OUT)
-	$(vecho) "FW $@"
-	$(Q) $(FW_TOOL) -eo $(TARGET_OUT) $(FW_FILE_1_ARGS)
-
-$(FW_FILE_2): $(TARGET_OUT)
-	$(vecho) "FW $@"
-	$(Q) $(FW_TOOL) -eo $(TARGET_OUT) $(FW_FILE_2_ARGS)
+$(FW_BASE)/%.bin: $(TARGET_OUT) | $(FW_BASE)
+	$(vecho) "FW $(FW_BASE)/"
+	$(Q) $(ESPTOOL) elf2image -o $(FW_BASE)/ $(TARGET_OUT)
 
 $(TARGET_OUT): $(APP_AR)
 	$(vecho) "LD $@"
@@ -129,7 +128,7 @@ checkdirs: $(BUILD_DIR) $(FW_BASE)
 $(BUILD_DIR):
 	$(Q) mkdir -p $@
 
-firmware:
+$(FW_BASE):
 	$(Q) mkdir -p $@
 
 flash: firmware/0x00000.bin firmware/0x40000.bin

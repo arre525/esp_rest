@@ -11,7 +11,11 @@
 #define LEDGPIO 		 12
 #define BTNGPIO 		 13
 #define CONF_PORT		 21
-#define MAX_DHT_READ_RETRY	 5
+#define MAX_DHT_READ_RETRY	 1
 #define DHT_READ_RETRY_DELAY_US	 100
+
+#define DEEPSLEEPTIMEOUTMS 10000
+#define DEEPSLEEPSECONDS 5*60
+#define MEASUREDELAYMS 1
 
 #endif

@@ -23,7 +23,7 @@
 #define MAXTIMINGS 10000
 #define BREAKTIME 20
 #define MAXTRY 200000
-#define DHT_PIN 2
+#define DHT_PIN 0
 
 float * ICACHE_FLASH_ATTR readDHT(void)
 {
@@ -33,6 +33,7 @@ float * ICACHE_FLASH_ATTR readDHT(void)
     int i = 0;
     int j = 0;
     int checksum = 0;
+    memset(r,0,sizeof(r));
 
     int data[5];
 
@@ -45,7 +46,7 @@ float * ICACHE_FLASH_ATTR readDHT(void)
     GPIO_OUTPUT_SET(DHT_PIN, 1);
     os_delay_us(40);
     GPIO_DIS_OUTPUT(DHT_PIN);
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO2_U);
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO0_U);
 
 
     // wait for pin to drop?
@@ -55,7 +56,7 @@ float * ICACHE_FLASH_ATTR readDHT(void)
     }
 
     if(i==MAXTRY) {
-        os_printf ("ERROR: GPIO wait error");
+        os_printf ("ERROR: GPIO wait error\n");
         return r;
     }
 
@@ -90,19 +91,18 @@ float * ICACHE_FLASH_ATTR readDHT(void)
         if (data[4] == checksum) {
             // yay! checksum is valid
 
-            hum_p = data[0] * 256 + data[1];
-            hum_p /= 10;
+            hum_p = data[0] + ((float) data[1])/100;
 
-            temp_p = (data[2] & 0x7F)* 256 + data[3];
-            temp_p /= 10.0;
-            if (data[2] & 0x80)
-                temp_p *= -1;
+            temp_p = data[2] + ((float) data[3])/100;
+
             r[0] = temp_p;
             r[1] = hum_p;
 
+            debug_print("Checksum was %d\n",checksum);
+
         }
         else
-        	debug_print("ERROR: DHT22 checksum is not correct");
+        	debug_print("ERROR: DHT22 checksum is not correct\n");
     }
     else
     	debug_print("ERROR: j < 39");
@@ -118,6 +118,6 @@ void ICACHE_FLASH_ATTR DHT(void) {
 
 void DHTInit() {
     //Set GPIO2 to output mode for DHT22
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO2_U);
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO0_U);
 }

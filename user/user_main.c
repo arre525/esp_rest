@@ -9,6 +9,7 @@
 #include "gpio.h"
 #include "os_type.h"
 #include "user_config.h"
+#include "user_interface.h"
 #include "private_user_config.h"
 #include "dht22.h"
 #include "uart_hw.h"
@@ -26,6 +27,7 @@ os_event_t    user_procTaskQueue[user_procTaskQueueLen];
 static void user_procTask(os_event_t *events);
 
 static volatile ETSTimer sensor_timer;
+static volatile ETSTimer deepsleeptimer;
 static volatile ETSTimer resetBtntimer;
 int lastTemp, lastHum;
 char lastTempTxt [8];
@@ -70,22 +72,40 @@ static void ICACHE_FLASH_ATTR read_DHT22()
 {
     int retry = 0;
     float *r;
+
     do {
         if (retry++ > 0)
         {
         	debug_print("DHT22 read fail, retrying, try %d/%d\n", retry, MAX_DHT_READ_RETRY);
             os_delay_us(DHT_READ_RETRY_DELAY_US);
         }
-        r = readDHT();
+        r = readDHT(); // Too many delays cause the esp to reset.. Cant do this a few times..
     }
     while ((r[0] == 0 && r[1] == 0) && retry < MAX_DHT_READ_RETRY);
-    debug_print("DHT read done\n");
-    lastTemp=(int)(r[0] * 100);
-    lastHum=(int)(r[1] * 100);    
-    convertToText (lastTemp, lastTempTxt, 8, 2);    
-    convertToText (lastHum, lastHumTxt, 8, 2);
-    debug_print ("Temp = %s *C, Hum = %s %\n", lastTempTxt, lastHumTxt);
+
+    if(!(r[0] == 0 && r[1] == 0))
+    {
+		debug_print("DHT read done\n");
+		lastTemp=(int)(r[0] * 100);
+		lastHum=(int)(r[1] * 100);
+		convertToText (lastTemp, lastTempTxt, 8, 2);
+		convertToText (lastHum, lastHumTxt, 8, 2);
+		debug_print ("Temp = %s *C, Hum = %s %\n", lastTempTxt, lastHumTxt);
+    }
+    else
+    {
+    	debug_print ("Nothing measured\n");
+    	lastTemp=(int)0;
+    	lastHum=(int)0;
+    }
 }
+
+
+static void ICACHE_FLASH_ATTR sensor_deepsleeptimer_func(void *arg)
+{
+	system_deep_sleep(INTERVAL_S*DEEPSLEEPSECONDS);
+}
+
 
 static void ICACHE_FLASH_ATTR at_tcpclient_sent_cb(void *arg)
 {
@@ -107,8 +127,8 @@ static void ICACHE_FLASH_ATTR at_tcpclient_discon_cb(void *arg) {
 
     os_free(pespconn);
    
-    debug_print ("going to deep sleep for %ds\n", INTERVAL_S);
-    system_deep_sleep(INTERVAL_S*1000*1000);
+    debug_print ("going to deep sleep\n");
+    sensor_deepsleeptimer_func(arg);
 }
 
 
@@ -176,17 +196,18 @@ static void ICACHE_FLASH_ATTR send_data()
 
 static void ICACHE_FLASH_ATTR sensor_timer_func(void *arg)
 {
-    // enable sensors power
-    enable_sensors();
-    // sleep and wait for sensors
-    os_delay_us(SENSORS_READY_WAIT_US);
     // readDHT
-    read_DHT22();
+    read_DHT22(); // TODO: Average out since the DHT is not really consitent
     // read pressure
-    // disable sensors
-    disable_sensors ();
     // send data
-    send_data();
+    if(lastTemp !=0 && lastHum != 0)
+    {
+    	send_data(); // Will go to sleep internally if succesful
+    }
+    else
+    {
+    	sensor_deepsleeptimer_func(arg);  // Failed measurement. Sleep;
+    }
 }
 
 
@@ -201,7 +222,8 @@ static void ICACHE_FLASH_ATTR initialize_timer()
 {
     os_timer_disarm(&sensor_timer);
     os_timer_setfn(&sensor_timer, (os_timer_func_t *)sensor_timer_func, NULL);
-    os_timer_arm(&sensor_timer, 5000, 0);
+    os_timer_arm(&sensor_timer, MEASUREDELAYMS, 0);
+
 }
 
 
@@ -210,24 +232,24 @@ static void ICACHE_FLASH_ATTR initialize_gpio()
     // Initialize the GPIO subsystem.
     gpio_init();
 
-    //Set GPIO12 to input mode
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
-    //PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTCK_U);
-    //PIN_PULLUP_EN(PERIPHS_IO_MUX_MTDI_U);
-    gpio_output_set(0, 0, 0, (1<<BTNGPIO));
+//    //Set GPIO12 to input mode
+//    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
+//    //PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
+//    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTCK_U);
+//    //PIN_PULLUP_EN(PERIPHS_IO_MUX_MTDI_U);
+//    gpio_output_set(0, 0, 0, (1<<BTNGPIO));
 
-    //Set GPIO2 to output mode
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO2_U, FUNC_GPIO2);
-    //Set GPIO2 low
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO2_U);
-    gpio_output_set(0, BIT2, BIT2, 0);
+    //Set GPIO0 to output mode
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
+    //Set GPIO0 low
+    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO0_U);
+    gpio_output_set(1, 0, 1, 0);
 
-    //Set GPIO13 to output mode
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
-    //PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
-    //Set GPIO13 low
-    gpio_output_set(0, (1<<LEDGPIO), (1<<LEDGPIO), 0);
+//    //Set GPIO13 to output mode
+//    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
+//    //PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
+//    //Set GPIO13 low
+//    gpio_output_set(0, (1<<LEDGPIO), (1<<LEDGPIO), 0);
 }
 
 static void ICACHE_FLASH_ATTR initialize_uart()
@@ -255,11 +277,13 @@ static void ICACHE_FLASH_ATTR normal_mode()
     os_printf ("Starting normal mode\n");
     DHTInit();
     debug_print ("DHT22 ready\n");
-    initialize_timer();
+    //initialize_timer();
+    sensor_timer_func(0); /* Directly go to measuring */
     debug_print ("Timer ready\n");
     os_printf ("Initialization complete, starting main task\n");
     //Start os task
-    system_os_task(user_procTask, user_procTaskPrio,user_procTaskQueue, user_procTaskQueueLen);
+//    system_os_task(user_procTask, user_procTaskPrio,user_procTaskQueue, user_procTaskQueueLen);
+//    system_os_post(user_procTaskPrio, 0, 0 );
 }
 
 static void ICACHE_FLASH_ATTR boot()
@@ -281,35 +305,51 @@ static void ICACHE_FLASH_ATTR boot()
 
 static void ICACHE_FLASH_ATTR resetBtnTimerCb(void *arg)
 {
-    totalCnt++;
-    if (!GPIO_INPUT_GET(BTNGPIO))
-        resetCnt++;
-    debug_print ("reset counter %d/%d\n", resetCnt, totalCnt);
+//    totalCnt++;
+//    if (!GPIO_INPUT_GET(BTNGPIO))
+//        resetCnt++;
+//    debug_print ("reset counter %d/%d\n", resetCnt, totalCnt);
+//
+//    if (totalCnt < 2)
+//        return;
+//
+//    os_timer_disarm(&resetBtntimer);
+//
+//    //int currentMode = wifi_get_opmode();
+//    if (resetCnt>=2)
+//    {
+//    	s_conf->boot_config = 1;
+//    	config_save();
+//    	os_printf("Restarting system into config mode...\n");
+//        wifi_station_disconnect();
+//        wifi_set_opmode(CFG_WIFI_MODE);
+//    }
+//    else
+//    {
+//        boot();
+//    }
+//    resetCnt=0;
+//    totalCnt=0;
 
-    if (totalCnt < 2)
-        return;
-
-    os_timer_disarm(&resetBtntimer);
-
-    //int currentMode = wifi_get_opmode();
-    if (resetCnt>=2)
-    {
-    	s_conf->boot_config = 1;
-    	config_save();
-    	os_printf("Restarting system into config mode...\n");
-        wifi_station_disconnect();
-        wifi_set_opmode(CFG_WIFI_MODE);
-    }
-    else
-    {
-        boot();
-    }
-    resetCnt=0;
-    totalCnt=0;
+	if(wifi_station_get_connect_status() == STATION_GOT_IP)
+	{
+		os_timer_disarm(&resetBtntimer);
+		normal_mode();
+	}
+	else
+	{
+		/* Wait for the next try */
+		debug_print("Not yet got an IP\n");
+	}
 }
 
 static void ICACHE_FLASH_ATTR resetInit()
 {
+
+    os_timer_disarm(&deepsleeptimer);
+    os_timer_setfn(&deepsleeptimer, (os_timer_func_t *)sensor_deepsleeptimer_func, NULL);
+    os_timer_arm(&deepsleeptimer, DEEPSLEEPTIMEOUTMS, 0);
+
     initialize_gpio();
     s_conf = config_init();
     os_printf("\n\nSoftware version: %s, config version: %d\n", SOFT_VERSION, CONFIG_VERSION);
