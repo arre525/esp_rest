@@ -104,6 +104,7 @@ static void ICACHE_FLASH_ATTR read_DHT22()
 static void ICACHE_FLASH_ATTR sensor_deepsleeptimer_func(void *arg)
 {
 	system_deep_sleep(INTERVAL_S*DEEPSLEEPSECONDS);
+	os_delay_us(100000); // This is important. If not, the device just resets
 }
 
 
