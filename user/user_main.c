@@ -28,8 +28,11 @@ static void user_procTask(os_event_t *events);
 
 static volatile ETSTimer sensor_timer;
 static volatile ETSTimer deepsleeptimer;
-static volatile ETSTimer resetBtntimer;
+static volatile ETSTimer checkwifitmr;
+static volatile ETSTimer dhtmeasurementtmr;
 int lastTemp, lastHum;
+int meascount = 0;
+int stopmeasuring = 0;
 char lastTempTxt [8];
 char lastHumTxt [8];
 char payload[512];
@@ -72,6 +75,8 @@ static void ICACHE_FLASH_ATTR read_DHT22()
 {
     int retry = 0;
     float *r;
+    int currtemp;
+    int currhum;
 
     do {
         if (retry++ > 0)
@@ -86,17 +91,21 @@ static void ICACHE_FLASH_ATTR read_DHT22()
     if(!(r[0] == 0 && r[1] == 0))
     {
 		debug_print("DHT read done\n");
-		lastTemp=(int)(r[0] * 100);
-		lastHum=(int)(r[1] * 100);
-		convertToText (lastTemp, lastTempTxt, 8, 2);
-		convertToText (lastHum, lastHumTxt, 8, 2);
+
+		currtemp=(int)(r[0] * 100);
+		currhum=(int)(r[1] * 100);
+		convertToText (currtemp, lastTempTxt, 8, 2);
+		convertToText (currhum, lastHumTxt, 8, 2);
 		debug_print ("Temp = %s *C, Hum = %s %\n", lastTempTxt, lastHumTxt);
+		lastTemp += currtemp;
+		lastHum += currhum;
+		meascount++;
     }
     else
     {
     	debug_print ("Nothing measured\n");
-    	lastTemp=(int)0;
-    	lastHum=(int)0;
+    	currtemp=(int)0;
+    	currhum=(int)0;
     }
 }
 
@@ -195,37 +204,24 @@ static void ICACHE_FLASH_ATTR send_data()
     espconn_connect(pCon);
 }
 
-static void ICACHE_FLASH_ATTR sensor_timer_func(void *arg)
+static void ICACHE_FLASH_ATTR doDHTmeasurement(void *arg)
 {
-    // readDHT
-    read_DHT22(); // TODO: Average out since the DHT is not really consitent
-    // read pressure
-    // send data
-    if(lastTemp !=0 && lastHum != 0)
-    {
-    	send_data(); // Will go to sleep internally if succesful
-    }
-    else
-    {
-    	sensor_deepsleeptimer_func(arg);  // Failed measurement. Sleep;
-    }
+	if(meascount < 100 && stopmeasuring != 1)
+	{
+		read_DHT22();
+		// read pressure
+		// send data
+
+		if(1)
+		{
+			os_timer_disarm(&dhtmeasurementtmr);
+			os_timer_setfn(&dhtmeasurementtmr, doDHTmeasurement, NULL); /* Assuming you can reschedule your own timer */
+			os_timer_arm(&dhtmeasurementtmr, 300, 0);
+		}
+	}
 }
 
 
-//Do nothing function
-static void ICACHE_FLASH_ATTR user_procTask(os_event_t *events)
-{
-    os_delay_us(10);
-    debug_print("In user_procTask\n");
-}
-
-static void ICACHE_FLASH_ATTR initialize_timer()
-{
-    os_timer_disarm(&sensor_timer);
-    os_timer_setfn(&sensor_timer, (os_timer_func_t *)sensor_timer_func, NULL);
-    os_timer_arm(&sensor_timer, MEASUREDELAYMS, 0);
-
-}
 
 
 static void ICACHE_FLASH_ATTR initialize_gpio()
@@ -233,24 +229,12 @@ static void ICACHE_FLASH_ATTR initialize_gpio()
     // Initialize the GPIO subsystem.
     gpio_init();
 
-//    //Set GPIO12 to input mode
-//    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
-//    //PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
-//    PIN_PULLUP_EN(PERIPHS_IO_MUX_MTCK_U);
-//    //PIN_PULLUP_EN(PERIPHS_IO_MUX_MTDI_U);
-//    gpio_output_set(0, 0, 0, (1<<BTNGPIO));
-
     //Set GPIO0 to output mode
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
     //Set GPIO0 low
     PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO0_U);
     gpio_output_set(1, 0, 1, 0);
 
-//    //Set GPIO13 to output mode
-//    PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTDI_U, FUNC_GPIO12);
-//    //PIN_FUNC_SELECT(PERIPHS_IO_MUX_MTCK_U, FUNC_GPIO13);
-//    //Set GPIO13 low
-//    gpio_output_set(0, (1<<LEDGPIO), (1<<LEDGPIO), 0);
 }
 
 static void ICACHE_FLASH_ATTR initialize_uart()
@@ -266,76 +250,39 @@ static void ICACHE_FLASH_ATTR initialize_uart()
     WRITE_PERI_REG(UART_INT_CLR(0), 0xffff);
 }
 
-static void ICACHE_FLASH_ATTR config_mode()
-{
-    os_printf ("Starting config mode\n");
-    config_mode_start();
-}
 
 
-static void ICACHE_FLASH_ATTR normal_mode()
+static void ICACHE_FLASH_ATTR wifirdy_senddata()
 {
     os_printf ("Starting normal mode\n");
-    DHTInit();
-    debug_print ("DHT22 ready\n");
-    //initialize_timer();
-    sensor_timer_func(0); /* Directly go to measuring */
-    debug_print ("Timer ready\n");
-    os_printf ("Initialization complete, starting main task\n");
-    //Start os task
-//    system_os_task(user_procTask, user_procTaskPrio,user_procTaskQueue, user_procTaskQueueLen);
-//    system_os_post(user_procTaskPrio, 0, 0 );
-}
+    debug_print ("Wifi is ready. Do a last measurement and send data\n");
 
-static void ICACHE_FLASH_ATTR boot()
-{
-	if (s_conf->boot_config == 1)
-	{
-		if (wifi_get_opmode() == STATION_MODE)
-		{
-			wifi_set_opmode(CFG_WIFI_MODE);
-			system_restart();
-		}
-		else
-			config_mode ();
-	}
+    /* We assume this function cannot run concurrently with another timer! In senddata however, we sleep again, so avoid other samples */
+    stopmeasuring = 1;
+
+    if(lastTemp !=0 && lastHum != 0 && meascount > 0)
+    {
+    	/* Average all results out */
+    	lastTemp = lastTemp / meascount;
+    	lastHum = lastHum / meascount;
+    	convertToText (lastTemp, lastTempTxt, 8, 2);
+		convertToText (lastHum, lastHumTxt, 8, 2);
+		debug_print ("-- FINAL -- Temp = %s *C, Hum = %s %\n", lastTempTxt, lastHumTxt);
+    	send_data(); // Will go to sleep internally if successful
+    }
     else
-        normal_mode ();
+    {
+    	sensor_deepsleeptimer_func(0);  // Failed measurement. Sleep;
+    }
 }
 
 
-static void ICACHE_FLASH_ATTR resetBtnTimerCb(void *arg)
+static void ICACHE_FLASH_ATTR CheckWifiTmr(void *arg)
 {
-//    totalCnt++;
-//    if (!GPIO_INPUT_GET(BTNGPIO))
-//        resetCnt++;
-//    debug_print ("reset counter %d/%d\n", resetCnt, totalCnt);
-//
-//    if (totalCnt < 2)
-//        return;
-//
-//    os_timer_disarm(&resetBtntimer);
-//
-//    //int currentMode = wifi_get_opmode();
-//    if (resetCnt>=2)
-//    {
-//    	s_conf->boot_config = 1;
-//    	config_save();
-//    	os_printf("Restarting system into config mode...\n");
-//        wifi_station_disconnect();
-//        wifi_set_opmode(CFG_WIFI_MODE);
-//    }
-//    else
-//    {
-//        boot();
-//    }
-//    resetCnt=0;
-//    totalCnt=0;
-
 	if(wifi_station_get_connect_status() == STATION_GOT_IP)
 	{
-		os_timer_disarm(&resetBtntimer);
-		normal_mode();
+		os_timer_disarm(&checkwifitmr);
+		wifirdy_senddata();
 	}
 	else
 	{
@@ -346,7 +293,7 @@ static void ICACHE_FLASH_ATTR resetBtnTimerCb(void *arg)
 
 static void ICACHE_FLASH_ATTR resetInit()
 {
-
+	/* Make sure we always go into deep sleep, whatever happens */
     os_timer_disarm(&deepsleeptimer);
     os_timer_setfn(&deepsleeptimer, (os_timer_func_t *)sensor_deepsleeptimer_func, NULL);
     os_timer_arm(&deepsleeptimer, DEEPSLEEPTIMEOUTMS, 0);
@@ -358,9 +305,27 @@ static void ICACHE_FLASH_ATTR resetInit()
     debug_print("Current DHCP status: %d\n", wifi_station_dhcpc_status());
     debug_print("Current wifi mode: %d\n", wifi_get_phy_mode());
 
-    os_timer_disarm(&resetBtntimer);
-    os_timer_setfn(&resetBtntimer, resetBtnTimerCb, NULL);
-    os_timer_arm(&resetBtntimer, 500, 1);
+    /*
+     * While the wifi is getting up, we poll 2x a second to see if it got there
+     * In the mean time, we do as many DHT measurements as we can, to average out any weirdness that may come out of it.
+     * Once the wifi is up, we take one final measurement, before sending everything through (unless we went into deep sleep by then)
+     *
+     * The only thing to watch out for, is that we have two concurrent timers. The one for wifi checking, and the one for DHT measurements
+     * I would find it surprising if one can interrupt another, but we'll build in a safety just to make sure
+     */
+
+    os_timer_disarm(&checkwifitmr);
+    os_timer_setfn(&checkwifitmr, CheckWifiTmr, NULL);
+    os_timer_arm(&checkwifitmr, 500, 1);
+
+    DHTInit();
+
+    /* We have to use timers for the measurements, since ending a timer function seems to be the only way to let the other code run, and avoid watchdogs */
+
+
+    os_timer_disarm(&dhtmeasurementtmr);
+    os_timer_setfn(&dhtmeasurementtmr, doDHTmeasurement, NULL);
+    os_timer_arm(&dhtmeasurementtmr, 300, 0);
 }
 
 void ICACHE_FLASH_ATTR init_done()
