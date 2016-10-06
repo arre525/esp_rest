@@ -175,7 +175,8 @@ static void ICACHE_FLASH_ATTR at_tcpclient_connect_cb(void *arg)
 }
 
 
-static void ICACHE_FLASH_ATTR send_data()
+/* DNS DONE */
+static void ICACHE_FLASH_ATTR send_data2(ip_addr_t *ipaddr)
 {
     struct espconn *pCon = (struct espconn *)os_zalloc(sizeof(struct espconn));
     if (pCon == NULL)
@@ -185,7 +186,6 @@ static void ICACHE_FLASH_ATTR send_data()
     }
     pCon->type = ESPCONN_TCP;
     pCon->state = ESPCONN_NONE;
-    uint32_t ip = ipaddr_addr(REMOTE_IP);
     pCon->proto.tcp = (esp_tcp *)os_zalloc(sizeof(esp_tcp));
     if (pCon->proto.tcp == NULL)
     {
@@ -196,12 +196,46 @@ static void ICACHE_FLASH_ATTR send_data()
     pCon->proto.tcp->remote_port = 80;
     //pCon->proto.tcp->remote_port = lwip_htons(80);
 
-    os_memcpy(pCon->proto.tcp->remote_ip, &ip, 4);
+    os_memcpy(pCon->proto.tcp->remote_ip, ipaddr, 4);
 
     espconn_regist_connectcb(pCon, at_tcpclient_connect_cb);
     espconn_regist_reconcb(pCon, at_tcpclient_reconnect_cb);
     debug_print("TCP connecting...\n");
     espconn_connect(pCon);
+}
+
+
+LOCAL void ICACHE_FLASH_ATTR
+dnsfound(const char *name, ip_addr_t *ipaddr, void *arg)
+{
+    struct espconn *pespconn = (struct espconn *)arg;
+
+    if (ipaddr == NULL) {
+    	os_printf("Error: Failed resolving ip\n");
+
+        return;
+    }
+
+    os_printf("IP found %d.%d.%d.%d\n",
+            *((uint8 *)&ipaddr->addr), *((uint8 *)&ipaddr->addr + 1),
+            *((uint8 *)&ipaddr->addr + 2), *((uint8 *)&ipaddr->addr + 3));
+
+    send_data2(ipaddr);
+
+}
+
+static void ICACHE_FLASH_ATTR send_data()
+{
+    struct espconn *pCon = (struct espconn *)os_zalloc(sizeof(struct espconn));
+    static ip_addr_t tempip ;
+    if (pCon == NULL)
+    {
+        os_printf("Error: TCP connect failed - memory allocation for conn failed\n");
+        return;
+    }
+    pCon->type = ESPCONN_TCP;
+    pCon->state = ESPCONN_NONE;
+    espconn_gethostbyname(pCon, "api.thingspeak.com", &tempip, dnsfound);
 }
 
 static void ICACHE_FLASH_ATTR doDHTmeasurement(void *arg)
